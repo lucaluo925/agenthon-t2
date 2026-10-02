@@ -1,0 +1,5 @@
+#!/bin/sh
+# The harness runs `docker run <image> forecast --panels ... --text ... --asof ... --out ...`,
+# so `forecast` must resolve from PATH. agent.py also takes the verb as a leading positional,
+# which covers an ENTRYPOINT-style invocation.
+exec python /app/agent.py "$@"

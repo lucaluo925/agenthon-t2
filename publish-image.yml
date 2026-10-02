@@ -1,0 +1,50 @@
+# Build and publish the Track 2 submission image to GHCR.
+#
+# Why a workflow rather than a local `docker push`: pushing needs a registry credential, and the
+# only machines in this project that could hold one are his Mac (no Docker installed) and the
+# cloud container (no credential, and none should be pasted into it). GitHub Actions already has
+# a token scoped to this repository's own package registry, so nothing has to be typed anywhere.
+#
+# After the first successful run, make the package public once:
+#   repo → Packages → agenthon-t2 → Package settings → Change visibility → Public.
+# The competition requires an image anonymously pullable by digest.
+name: publish-image
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push (linux/amd64, as the contract requires)
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          provenance: false          # a provenance attestation turns the tag into an index;
+          sbom: false                # the descriptor names one image digest, so keep it single
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/agenthon-t2:${{ github.sha }}
+
+      - name: The digest to paste into submission.json
+        run: |
+          echo "image.registry   = ghcr.io"
+          echo "image.repository = ${{ github.repository_owner }}/agenthon-t2"
+          echo "image.digest     = ${{ steps.build.outputs.digest }}"
