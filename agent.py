@@ -45,6 +45,11 @@ MAX_DRAWS = 20000
 RETURN_TRIPWIRE = 0.2
 RATIONALE = "forecast_rationale.md"
 META = "forecast_meta.json"
+# forecast.schema.json: `target` is OPTIONAL and enum[level, log_return, yield]. The card's
+# target_type is organizer input we do not control, so an out-of-enum value echoed into the
+# sidecar fails g1_schema and refuses the unit (worst case 4.0). Omitting an optional key
+# costs a declaration; writing an illegal one costs the unit.
+TARGET_ENUM = ("level", "log_return", "yield")
 CFG_NAME = "ship"
 
 
@@ -160,7 +165,7 @@ def draw_primary(
     target_type: str,
     unit_id: str,
     n_draws: int,
-    step_override: dict[int, int] | None,
+    step_override: dict[tuple[str, int], int] | None,
 ) -> tuple[np.ndarray, list[tuple[str, int]], dict]:
     sorted_assets = sorted(assets)
     hist = {a: asset_history(panels, a, asof) for a in sorted_assets}
@@ -177,8 +182,8 @@ def draw_primary(
     a_index = {a: i for i, a in enumerate(sorted_assets)}
     s_of: dict[tuple[str, int], int] = {}
     for asset, horizon in cells:
-        if step_override and horizon in step_override:
-            s_of[(asset, horizon)] = int(step_override[horizon])
+        if step_override and (asset, horizon) in step_override:
+            s_of[(asset, horizon)] = int(step_override[(asset, horizon)])
         else:
             s_of[(asset, horizon)] = horizon_steps(hist[asset], horizon, None)
     s_max = max(s_of.values())
@@ -308,7 +313,8 @@ def monthly_steps(card: dict, spec: dict, assets, horizons, panels: pd.DataFrame
     )
     if not periods or len(periods) != len(horizons):
         return None
-    out: dict[int, int] = {}
+    # 键是 (asset, horizon)，不是 horizon —— 见循环体里的说明。
+    out: dict[tuple[str, int], int] = {}
     for asset in assets:
         rows = panels[panels["asset"] == asset]
         if rows.empty:
@@ -322,7 +328,12 @@ def monthly_steps(card: dict, spec: dict, assets, horizons, panels: pd.DataFrame
             steps = 12 * (p.year - last.year) + (p.month - last.month)
             if steps <= 0:
                 return None
-            out[h] = int(steps)
+            # 键必须带 asset：月度宏观面板的发布滞后逐资产不同（CPI 与 UNRATE 的最新
+            # 月份常差一个月），算出的 steps 也不同。原来以 horizon 为键，最后一个
+            # 资产会覆盖前面所有资产，然后被套用到整张卡的每个 cell 上。单资产卡上
+            # 两种键等价，所以这个改动在已发布的那四张月度卡上按构造是零改动；
+            # 会变的只有多资产月度卡。见 docs/CODE_REVIEW.md High-2。
+            out[(asset, h)] = int(steps)
     return out
 
 
@@ -421,7 +432,7 @@ def write_outputs(out_path: Path, draws, cells, unit_id, asof, assets, horizons,
     })
     frame.to_parquet(out_path, index=False)
 
-    (out_dir / META).write_text(json.dumps({
+    meta = {
         "unit_id": unit_id,
         "asof": asof,
         "representation": "samples",
@@ -429,7 +440,10 @@ def write_outputs(out_path: Path, draws, cells, unit_id, asof, assets, horizons,
         "horizons": [int(h) for h in horizons],
         "n_draws": n_draws,
         "target": ttype,
-    }, indent=2) + "\n")
+    }
+    if meta["target"] not in TARGET_ENUM:
+        del meta["target"]
+    (out_dir / META).write_text(json.dumps(meta, indent=2) + "\n")
 
     (out_dir / RATIONALE).write_text(
         rationale_text(unit_id, asof, assets, horizons, ttype, n_draws, diag, text_dir, elapsed)
